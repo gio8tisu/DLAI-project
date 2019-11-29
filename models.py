@@ -74,7 +74,7 @@ class ConvolutionalEncoder(torch.nn.Module):
             n_filters = 2 * n_filters
 
         self.encoder = torch.nn.Sequential(*layers)
-        self.output_channels = n_filters
+        self.output_channels = input_channels
 
     def forward(self, x):
         return self.encoder(x)
@@ -82,7 +82,7 @@ class ConvolutionalEncoder(torch.nn.Module):
 
 class ConvolutionalDecoder(torch.nn.Module):
 
-    UPSAMPLING_METHODS = ["transposed", "bilinear", "bicubic" "nearest"]
+    UPSAMPLING_METHODS = ["transposed", "bilinear", "bicubic", "nearest"]
 
     def __init__(self, n_blocks, upsampling_method, input_channels,
                  layers_per_block=2, kernel_size=5, output_channels=1):
@@ -102,7 +102,9 @@ class ConvolutionalDecoder(torch.nn.Module):
         for _ in range(n_blocks):
             if upsampling_method == "transposed":
                 # Deconvolutional block
-                pass
+                conv_block = DeconvolutionalBlock(input_channels, n_filters,
+                                                  kernel_size, layers_per_block,
+                                                  stride=2)
             else:
                 # Upsampling.
                 conv_block = torch.nn.Sequential(
@@ -116,7 +118,7 @@ class ConvolutionalDecoder(torch.nn.Module):
             n_filters = n_filters // 2
 
         # Last layer so we have <output_channels> channel.
-        layers.append(torch.nn.Conv2d(n_filters, output_channels, kernel_size,
+        layers.append(torch.nn.Conv2d(input_channels, output_channels, kernel_size,
                                       padding=kernel_size // 2))
         layers.append(torch.nn.Tanh())
 
@@ -187,3 +189,15 @@ class DeconvolutionalBlock(torch.nn.Module):
 
     def forward(self, x):
         return self.block(x)
+
+
+if __name__ == '__main__':
+    image = torch.randn((1, 1, 128, 128))
+    autoencoder = ConvolutionalAutoencoder(2, 'max-pooling', 'nearest')
+    output = autoencoder(image)
+    assert output.shape == (1, 1, 128, 128)
+
+    image = torch.randn((1, 1, 128, 128))
+    autoencoder = ConvolutionalAutoencoder(2, 'max-pooling', 'transposed')
+    output = autoencoder(image)
+    assert output.shape == (1, 1, 128, 128), print(output.shape)
