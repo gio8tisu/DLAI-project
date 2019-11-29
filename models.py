@@ -40,7 +40,7 @@ class ConvolutionalEncoder(torch.nn.Module):
 
         layers = []
 
-        # First layer so we have <init_filters> channels.
+        # First layer so we have <input_channels> channels.
         n_filters = init_filters
         layers.append(
             ConvolutionalBlock(input_channels, n_filters, kernel_size, 1))
@@ -82,31 +82,37 @@ class ConvolutionalEncoder(torch.nn.Module):
 
 class ConvolutionalDecoder(torch.nn.Module):
 
-    UPSAMPLING_METHODS = ["transposed", "bilinear", "nearest"]
+    UPSAMPLING_METHODS = ["transposed", "bilinear", "bicubic" "nearest"]
 
-    def __init__(self, n_blocks, upsampling_method, init_filters,
+    def __init__(self, n_blocks, upsampling_method, input_channels,
                  layers_per_block=2, kernel_size=5, output_channels=1):
         super().__init__()
         self.n_blocks = n_blocks
         assert upsampling_method in self.UPSAMPLING_METHODS
         self.upsampling_method = upsampling_method
         self.layers_per_block = layers_per_block
-        self.init_filters = init_filters
+        self.input_channels = input_channels
         self.kernel_size = kernel_size
         self.output_channels = output_channels
 
         layers = []
 
         # Decoding blocks.
-        n_filters = init_filters
+        n_filters = input_channels
         for _ in range(n_blocks):
             if upsampling_method == "transposed":
-                layers.append(ConvolutionalBlock(n_filters, kernel_size, layers_per_block))
-            elif upsampling_method == "bilinear":
-                layers.append(ConvolutionalBlock(n_filters, kernel_size, layers_per_block))
+                # Deconvolutional block
+                pass
             else:
-                layers.append(DeconvolutionalBlock(n_filters, kernel_size, layers_per_block))
-            # Double the number of filters.
+                # Upsampling.
+                conv_block = torch.nn.Sequential(
+                    ConvolutionalBlock(input_channels, n_filters, kernel_size,
+                                       layers_per_block),
+                    torch.nn.Upsample(scale_factor=2, mode=upsampling_method)
+                )
+            layers.append(conv_block)
+            # Half the number of filters.
+            input_channels = n_filters
             n_filters = n_filters // 2
 
         # Last layer so we have <output_channels> channel.
