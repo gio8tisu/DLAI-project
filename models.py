@@ -12,7 +12,7 @@ class ConvolutionalAutoencoder(torch.nn.Module):
         self.upsampling_method = upsampling_method
 
         self.encoder = ConvolutionalEncoder(n_blocks, downsampling_method,
-                                            layers_per_block)
+                                            layers_per_block=layers_per_block)
         self.decoder = ConvolutionalDecoder(n_blocks, upsampling_method,
                                             self.encoder.output_channels,
                                             layers_per_block)
@@ -25,10 +25,13 @@ class ConvolutionalAutoencoder(torch.nn.Module):
 
 class ConvolutionalEncoder(torch.nn.Module):
 
-    def __init__(self, n_blocks, downsampling_method, layers_per_block=2,
-                 init_filters=16, kernel_size=5, input_channels=1):
+    DOWNSAMPLING_METHODS = ["max-pooling", "avg-pooling", "stride-2"]
+
+    def __init__(self, n_blocks, downsampling_method, init_filters=16,
+                 layers_per_block=2, kernel_size=5, input_channels=1):
         super().__init__()
         self.n_blocks = n_blocks
+        assert downsampling_method in self.DOWNSAMPLING_METHODS
         self.downsampling_method = downsampling_method
         self.layers_per_block = layers_per_block
         self.init_filters = init_filters
@@ -39,17 +42,36 @@ class ConvolutionalEncoder(torch.nn.Module):
 
         # First layer so we have <init_filters> channels.
         n_filters = init_filters
-        layers.append(torch.nn.Conv2d(input_channels, n_filters, kernel_size,
-                                      padding=kernel_size // 2))
-        layers.append(torch.nn.ReLU())
+        layers.append(
+            ConvolutionalBlock(input_channels, n_filters, kernel_size, 1))
 
         # Encoding blocks.
+        input_channels = n_filters
         for _ in range(n_blocks):
-            layers.append(ConvolutionalBlock(n_filters, kernel_size, layers_per_block))
+            if downsampling_method == "max-pooling":
+                # Convolutional block + max pooling.
+                conv_block = torch.nn.Sequential(
+                    ConvolutionalBlock(input_channels, n_filters, kernel_size,
+                                       layers_per_block),
+                    torch.nn.MaxPool2d(2)
+                )
+            elif downsampling_method == "avg-pooling":
+                # Convolutional block + average pooling.
+                conv_block = torch.nn.Sequential(
+                    ConvolutionalBlock(input_channels, n_filters, kernel_size,
+                                       layers_per_block),
+                    torch.nn.AvgPool2d(2)
+                )
+            else:
+                # Stride-2 convolution.
+                conv_block = ConvolutionalBlock(input_channels, n_filters,
+                                                kernel_size,
+                                                layers_per_block,
+                                                last_stride=2)
+            layers.append(conv_block)
             # Double the number of filters.
+            input_channels = n_filters
             n_filters = 2 * n_filters
-            # Down-sampling
-            # TODO
 
         self.encoder = torch.nn.Sequential(*layers)
         self.output_channels = n_filters
@@ -60,10 +82,13 @@ class ConvolutionalEncoder(torch.nn.Module):
 
 class ConvolutionalDecoder(torch.nn.Module):
 
+    UPSAMPLING_METHODS = ["transposed", "bilinear", "nearest"]
+
     def __init__(self, n_blocks, upsampling_method, init_filters,
                  layers_per_block=2, kernel_size=5, output_channels=1):
         super().__init__()
         self.n_blocks = n_blocks
+        assert upsampling_method in self.UPSAMPLING_METHODS
         self.upsampling_method = upsampling_method
         self.layers_per_block = layers_per_block
         self.init_filters = init_filters
@@ -71,14 +96,18 @@ class ConvolutionalDecoder(torch.nn.Module):
         self.output_channels = output_channels
 
         layers = []
+
         # Decoding blocks.
         n_filters = init_filters
         for _ in range(n_blocks):
-            layers.append(ConvolutionalBlock(n_filters, kernel_size, layers_per_block))
+            if upsampling_method == "transposed":
+                layers.append(ConvolutionalBlock(n_filters, kernel_size, layers_per_block))
+            elif upsampling_method == "bilinear":
+                layers.append(ConvolutionalBlock(n_filters, kernel_size, layers_per_block))
+            else:
+                layers.append(DeconvolutionalBlock(n_filters, kernel_size, layers_per_block))
             # Double the number of filters.
             n_filters = n_filters // 2
-            # Up-sampling
-            # TODO
 
         # Last layer so we have <output_channels> channel.
         layers.append(torch.nn.Conv2d(n_filters, output_channels, kernel_size,
@@ -99,25 +128,42 @@ class ConvolutionalBlock(torch.nn.Module):
     keeping the same spacial size.
     """
 
-    def __init__(self, n_filters, kernel_size, n_layers, last_stride=1):
+    def __init__(self, input_channels, n_filters, kernel_size, n_layers, last_stride=1):
         super().__init__()
         layers = []
         padding = kernel_size // 2  # To keep the same size.
 
-        # First convolutional layers (Conv + ReLU).
-        for _ in range(n_layers - 1):
-            layers.append(torch.nn.Conv2d(n_filters, n_filters,
-                                          kernel_size=kernel_size,
-                                          padding=padding))
+        for i in range(n_layers):
+            if i == 0:  # First layer with correct input channels.
+                layers.append(torch.nn.Conv2d(input_channels, n_filters,
+                                              kernel_size, padding=padding))
+            elif 0 < i < n_layers:  # Intermediate layers.
+                layers.append(torch.nn.Conv2d(n_filters, n_filters,
+                                              kernel_size, padding=padding))
+            else:  # Last layer with stride.
+                layers.append(torch.nn.Conv2d(n_filters, n_filters,
+                                              kernel_size, last_stride, padding))
             layers.append(torch.nn.ReLU())
-
-        # Last convolutional layer (Strided-Conv + ReLU).
-        layers.append(torch.nn.Conv2d(n_filters, n_filters,
-                                      kernel_size, last_stride, padding))
-        layers.append(torch.nn.ReLU())
 
         # To sequentially apply the layers.
         self.block = torch.nn.Sequential(*layers)
 
     def forward(self, x):
         return self.block(x)
+
+
+class DeconvolutionalBlock(torch.nn.Module):
+    """
+
+    Applies n_layers transposed convolution layers with the same number of
+    filters and filter sizes with ReLU activations
+    keeping the same spacial size.
+    """
+
+    def __init__(self, n_filters, kernel_size, n_layers):
+        super().__init__()
+        layers = []
+        # TODO: padding = ...
+
+        # Transposed convolution layer.
+        layers.append(torch.nn.ConvTranspose2d())
