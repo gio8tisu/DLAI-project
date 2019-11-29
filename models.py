@@ -128,7 +128,8 @@ class ConvolutionalBlock(torch.nn.Module):
     keeping the same spacial size.
     """
 
-    def __init__(self, input_channels, n_filters, kernel_size, n_layers, last_stride=1):
+    def __init__(self, input_channels, n_filters, kernel_size, n_layers,
+                 last_stride=1):
         super().__init__()
         layers = []
         padding = kernel_size // 2  # To keep the same size.
@@ -155,15 +156,28 @@ class ConvolutionalBlock(torch.nn.Module):
 class DeconvolutionalBlock(torch.nn.Module):
     """
 
-    Applies n_layers transposed convolution layers with the same number of
-    filters and filter sizes with ReLU activations
-    keeping the same spacial size.
+    Applies a transposed convolution followed by n_layers-1 convolutional
+    layers with the same number of filters and filter sizes with ReLU
+    activations keeping the same spacial size.
     """
 
-    def __init__(self, n_filters, kernel_size, n_layers):
+    def __init__(self, input_channels, n_filters, kernel_size, n_layers, stride):
         super().__init__()
         layers = []
-        # TODO: padding = ...
+        padding = kernel_size // 2
 
         # Transposed convolution layer.
-        layers.append(torch.nn.ConvTranspose2d())
+        layers.append(torch.nn.ConvTranspose2d(input_channels, n_filters,
+                                               kernel_size, stride, padding))
+        layers.append(torch.nn.ReLU())
+
+        for _ in range(n_layers - 1):
+            layers.append(torch.nn.Conv2d(n_filters, n_filters, kernel_size,
+                                          padding=padding))
+            layers.append(torch.nn.ReLU())
+
+        # To sequentially apply the layers.
+        self.block = torch.nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.block(x)
