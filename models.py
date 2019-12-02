@@ -23,8 +23,47 @@ class ConvolutionalAutoencoder(torch.nn.Module):
         return reconstruction
 
 
-class ConvolutionalEncoder(torch.nn.Module):
+class ConvolutionalAutoencoderReducedLatentDim(torch.nn.Module):
 
+    def __init__(self, input_shape, n_blocks, downsampling_method, upsampling_method,
+                 layers_per_block=2, latent_dimensionality=50):
+        super().__init__()
+        self.n_blocks = n_blocks
+        self.downsampling_method = downsampling_method
+        self.upsampling_method = upsampling_method
+        self.latent_dimensionality = latent_dimensionality
+
+        # Encoder: Convolutional blocks + Linear
+        self.convolutional_encoder = ConvolutionalEncoder(
+            n_blocks, downsampling_method, layers_per_block=layers_per_block)
+        self.output_shape = (self.convolutional_encoder.init_filters * 2 ** (n_blocks - 1),
+                             input_shape[0] // 2 ** n_blocks,
+                             input_shape[1] // 2 ** n_blocks)
+        self.linear_encoder = torch.nn.Sequential(
+            torch.nn.Flatten(),
+            torch.nn.Linear(self.output_shape[0] * self.output_shape[1] * self.output_shape[2],
+                            latent_dimensionality),
+            torch.nn.ReLU()
+        )
+
+        # Decoder: Linear + Convolutional blocks
+        self.linear_decoder = torch.nn.Sequential(
+            torch.nn.Linear(latent_dimensionality,
+                            self.output_shape[0] * self.output_shape[1] * self.output_shape[2]),
+            torch.nn.ReLU()
+        )
+        self.convolutional_decoder = ConvolutionalDecoder(
+            n_blocks, upsampling_method,
+            self.convolutional_encoder.output_channels, layers_per_block)
+
+    def forward(self, x):
+        code = self.linear_encoder(self.convolutional_encoder(x))
+        reconstruction = self.convolutional_decoder(
+            self.linear_decoder(code).view((-1,) + self.output_shape))
+        return reconstruction
+
+
+class ConvolutionalEncoder(torch.nn.Module):
     DOWNSAMPLING_METHODS = ["max-pooling", "avg-pooling", "stride-2"]
 
     def __init__(self, n_blocks, downsampling_method, init_filters=16,
@@ -81,7 +120,6 @@ class ConvolutionalEncoder(torch.nn.Module):
 
 
 class ConvolutionalDecoder(torch.nn.Module):
-
     UPSAMPLING_METHODS = ["transposed", "bilinear", "bicubic", "nearest"]
 
     def __init__(self, n_blocks, upsampling_method, input_channels,
@@ -176,7 +214,7 @@ class DeconvolutionalBlock(torch.nn.Module):
 
         # Transposed convolution layer.
         layers.append(torch.nn.ConvTranspose2d(input_channels, n_filters,
-                                               kernel_size, stride, padding))
+                                               kernel_size, stride, padding, 1))
         layers.append(torch.nn.ReLU())
 
         for _ in range(n_layers - 1):
@@ -192,11 +230,19 @@ class DeconvolutionalBlock(torch.nn.Module):
 
 
 if __name__ == '__main__':
+    # Max-pooling downsampling + nearest neighbour upsampling autoencoder test.
     image = torch.randn((1, 1, 128, 128))
     autoencoder = ConvolutionalAutoencoder(2, 'max-pooling', 'nearest')
     output = autoencoder(image)
     assert output.shape == (1, 1, 128, 128)
 
+    # Max-pooling downsampling + linear + nearest neighbour upsampling autoencoder test.
+    image = torch.randn((1, 1, 128, 128))
+    autoencoder = ConvolutionalAutoencoderReducedLatentDim((128, 128), 2, 'max-pooling', 'nearest')
+    output = autoencoder(image)
+    assert output.shape == (1, 1, 128, 128)
+
+    # Max-pooling downsampling + transposed convolution upsampling autoencoder test.
     image = torch.randn((1, 1, 128, 128))
     autoencoder = ConvolutionalAutoencoder(2, 'max-pooling', 'transposed')
     output = autoencoder(image)
