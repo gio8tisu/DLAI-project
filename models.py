@@ -36,12 +36,13 @@ class ConvolutionalAutoencoderReducedLatentDim(torch.nn.Module):
         # Encoder: Convolutional blocks + Linear
         self.convolutional_encoder = ConvolutionalEncoder(
             n_blocks, downsampling_method, layers_per_block=layers_per_block)
-        self.output_shape = (self.convolutional_encoder.init_filters * 2 ** (n_blocks - 1),
-                             input_shape[0] // 2 ** n_blocks,
-                             input_shape[1] // 2 ** n_blocks)
-        self.linear_encoder = torch.nn.Sequential(
+        self.encoder_output_shape = (self.convolutional_encoder.init_filters * 2 ** (n_blocks - 1),
+                                     input_shape[0] // 2 ** n_blocks,
+                                     input_shape[1] // 2 ** n_blocks)
+        self.encoder = torch.nn.Sequential(
+            self.convolutional_encoder,
             torch.nn.Flatten(),
-            torch.nn.Linear(self.output_shape[0] * self.output_shape[1] * self.output_shape[2],
+            torch.nn.Linear(self.encoder_output_shape[0] * self.encoder_output_shape[1] * self.encoder_output_shape[2],
                             latent_dimensionality),
             torch.nn.ReLU()
         )
@@ -49,7 +50,7 @@ class ConvolutionalAutoencoderReducedLatentDim(torch.nn.Module):
         # Decoder: Linear + Convolutional blocks
         self.linear_decoder = torch.nn.Sequential(
             torch.nn.Linear(latent_dimensionality,
-                            self.output_shape[0] * self.output_shape[1] * self.output_shape[2]),
+                            self.encoder_output_shape[0] * self.encoder_output_shape[1] * self.encoder_output_shape[2]),
             torch.nn.ReLU()
         )
         self.convolutional_decoder = ConvolutionalDecoder(
@@ -57,9 +58,9 @@ class ConvolutionalAutoencoderReducedLatentDim(torch.nn.Module):
             self.convolutional_encoder.output_channels, layers_per_block)
 
     def forward(self, x):
-        code = self.linear_encoder(self.convolutional_encoder(x))
+        code = self.encoder(x)
         reconstruction = self.convolutional_decoder(
-            self.linear_decoder(code).view((-1,) + self.output_shape))
+            self.linear_decoder(code).view((-1,) + self.encoder_output_shape))
         return reconstruction
 
 
