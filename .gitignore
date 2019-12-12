@@ -105,3 +105,5 @@ venv.bak/
 
 .idea
 .DS_STORE
+*.pt
+mnist_dataset
